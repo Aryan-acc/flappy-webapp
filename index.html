@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
+  <title>Flappy Bird</title>
+
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+  <style>
+    :root{
+      --text:#eaf2ff; --muted:#b6c7e6; --panel: rgba(8,14,28,.55);
+      --border: rgba(255,255,255,.14); --shadow: 0 18px 50px rgba(0,0,0,.35);
+      --btn: rgba(255,255,255,.10); --btn2: rgba(255,255,255,.16); --danger:#ff4d6d;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0;
+      /* mobile: use dynamic viewport height */
+      min-height: 100dvh;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:0;
+      overflow:hidden; /* prevent page scroll */
+      background:
+        radial-gradient(900px 500px at 20% 10%, rgba(78,161,255,.25) 0%, transparent 55%),
+        radial-gradient(900px 500px at 80% 0%, rgba(255,91,122,.18) 0%, transparent 55%),
+        linear-gradient(180deg, #123a6a, #0b1630);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      color:var(--text);
+      touch-action: none; /* reduce accidental gestures */
+    }
+
+    /* Responsive container:
+       - Desktop: max width, good height
+       - Mobile: full screen (safe area aware) */
+    .game{
+      position:relative;
+      width:min(900px, 100vw);
+      height:min(640px, 100dvh);
+      border-radius: 18px;
+      overflow:hidden;
+      border:1px solid var(--border);
+      box-shadow: var(--shadow);
+      background: rgba(255,255,255,.03);
+
+      /* safe area paddings (iPhone notch) */
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+      padding-left: env(safe-area-inset-left);
+      padding-right: env(safe-area-inset-right);
+    }
+
+    /* If screen is narrow, make it full height */
+    @media (max-width: 520px){
+      .game{
+        width: 100vw;
+        height: 100dvh;
+        border-radius: 0; /* feels native fullscreen */
+        border:0;
+        box-shadow: none;
+      }
+    }
+
+    canvas{
+      display:block;
+      width:100%;
+      height:100%;
+      background:
+        linear-gradient(180deg, rgba(120,220,255,.22), rgba(16,58,106,.22)),
+        radial-gradient(900px 450px at 30% 30%, rgba(255,255,255,.10), transparent 55%),
+        linear-gradient(180deg, #2f78c8, #103a6a);
+      touch-action: none;
+    }
+
+    .hud{
+      position:absolute; left:10px; top:10px;
+      display:flex; gap:8px; z-index:5;
+      user-select:none; pointer-events:none;
+    }
+    .chip{
+      background: var(--panel); border:1px solid var(--border);
+      border-radius:12px; padding:8px 10px; font-weight:800; font-size:13px;
+      backdrop-filter: blur(8px);
+    }
+    .chip span{color:var(--muted);font-weight:700;margin-right:6px}
+
+    .overlay{
+      position:absolute; inset:0; z-index:10;
+      display:flex; align-items:center; justify-content:center; padding:14px;
+      background: rgba(2,6,18,.55); backdrop-filter: blur(10px);
+      touch-action: none;
+    }
+    .overlay.hidden{display:none}
+    .modal{
+      width:min(520px, calc(100% - 24px));
+      background: rgba(14,22,40,.92);
+      border:1px solid var(--border);
+      border-radius:18px;
+      padding:14px;
+      box-shadow: var(--shadow);
+      text-align:left;
+    }
+    .modal h2{margin:0 0 8px 0;font-size:18px}
+    .modal p{margin:0;color:var(--muted);line-height:1.8;font-size:13px}
+    .big{margin:12px 0 8px 0; font-size:34px; font-weight:950;}
+    .actions{margin-top:10px; display:flex; gap:10px; flex-wrap:wrap}
+    button{
+      border:1px solid var(--border); background: var(--btn); color:var(--text);
+      padding:10px 12px; border-radius:12px; cursor:pointer; font-weight:900;
+      transition: transform .08s ease, background .2s ease;
+    }
+    button:hover{background: var(--btn2)}
+    button:active{transform:scale(.98)}
+    button.primary{border:0; background:#4ea1ff; color:#071226}
+    button.danger{border:0; background:var(--danger); color:#fff}
+  </style>
+</head>
+<body>
+
+  <div class="game">
+    <canvas id="c"></canvas>
+
+    <div class="hud">
+      <div class="chip"><span>Score</span><b id="score">0</b></div>
+      <div class="chip"><span>Best</span><b id="best">0</b></div>
+    </div>
+
+    <div class="overlay" id="overlay">
+      <div class="modal">
+        <h2 id="title">Flappy Bird</h2>
+        <p id="msg">Tap / click to start.</p>
+        <div class="big">Score: <span id="finalScore">0</span></div>
+        <div class="actions">
+          <button class="primary" id="playBtn">Play</button>
+          <button id="pauseBtn">Pause</button>
+          <button class="danger" id="closeBtn">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+  if (tg) { tg.ready(); tg.expand(); }
+
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+
+  const scoreEl = document.getElementById("score");
+  const bestEl = document.getElementById("best");
+
+  const overlay = document.getElementById("overlay");
+  const titleEl = document.getElementById("title");
+  const msgEl = document.getElementById("msg");
+  const finalScoreEl = document.getElementById("finalScore");
+
+  const playBtn = document.getElementById("playBtn");
+  const pauseBtn = document.getElementById("pauseBtn");
+  const closeBtn = document.getElementById("closeBtn");
+
+  // ----- HiDPI resize, but also update on orientation changes -----
+  function resizeCanvas(){
+    const dpr = Math.max(1, Math.min(2.5, window.devicePixelRatio || 1));
+    const rect = canvas.getBoundingClientRect();
+    canvas.width  = Math.floor(rect.width  * dpr);
+    canvas.height = Math.floor(rect.height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener("resize", () => resizeCanvas());
+  window.addEventListener("orientationchange", () => setTimeout(resizeCanvas, 150));
+
+  let best = Number(localStorage.getItem("flappy_best_webapp") || 0);
+  bestEl.textContent = best;
+
+  const G = 1600, JUMP = 520, PIPE_W = 74, GAP = 160, GROUND_H = 56;
+  const PIPE_SPEED = 230, SPAWN_EVERY = 1.15;
+
+  const State = { READY:0, RUNNING:1, PAUSED:2, OVER:3 };
+  let state = State.READY;
+
+  let score = 0, pipes = [], timeSinceSpawn = 0, lastT = 0, raf = 0;
+  const bird = { x: 150, y: 0, r: 16, vy: 0 };
+  let clouds = [];
+
+  function initClouds(){
+    const w = canvas.getBoundingClientRect().width;
+    clouds = [
+      {x: 40, y: 70, s: 0.35},
+      {x: w*0.45, y: 120, s: 0.25},
+      {x: w*0.75, y: 85, s: 0.30},
+    ];
+  }
+
+  function showOverlay(kind){
+    overlay.classList.remove("hidden");
+    finalScoreEl.textContent = score;
+
+    if (kind === "ready"){
+      titleEl.textContent = "Flappy Bird";
+      msgEl.textContent = "Tap / click to start.";
+      playBtn.textContent = "Play";
+      pauseBtn.textContent = "Pause";
+    } else if (kind === "pause"){
+      titleEl.textContent = "Paused";
+      msgEl.textContent = "Tap Resume to continue.";
+      playBtn.textContent = "Resume";
+      pauseBtn.textContent = "Resume";
+    } else if (kind === "over"){
+      titleEl.textContent = "Game Over";
+      msgEl.textContent = "Try again!";
+      playBtn.textContent = "Play Again";
+      pauseBtn.textContent = "Pause";
+    }
+  }
+  function hideOverlay(){ overlay.classList.add("hidden"); }
+
+  function setState(next){
+    state = next;
+    if (state === State.READY) showOverlay("ready");
+    if (state === State.PAUSED) showOverlay("pause");
+    if (state === State.OVER) showOverlay("over");
+    if (state === State.RUNNING) hideOverlay();
+  }
+
+  function reset(keepOverlay=false){
+    cancelAnimationFrame(raf); raf = 0; lastT = 0;
+    score = 0; scoreEl.textContent = "0";
+
+    const rect = canvas.getBoundingClientRect();
+    bird.y = rect.height * 0.5; bird.vy = 0;
+
+    pipes = []; timeSinceSpawn = 0;
+    initClouds();
+
+    if (!keepOverlay) setState(State.READY);
+    draw();
+  }
+
+  function rand(min, max){ return Math.random() * (max - min) + min; }
+
+  function spawnPipe(){
+    const rect = canvas.getBoundingClientRect();
+    const h = rect.height;
+    const maxTop = h - GROUND_H - GAP - 70;
+    const topH = rand(60, Math.max(60, maxTop));
+    const gapY = topH + GAP;
+    pipes.push({ x: rect.width + 20, topH, gapY, passed:false });
+  }
+
+  function circleRectCollide(cx, cy, r, rx, ry, rw, rh){
+    const nx = Math.max(rx, Math.min(cx, rx + rw));
+    const ny = Math.max(ry, Math.min(cy, ry + rh));
+    const dx = cx - nx, dy = cy - ny;
+    return (dx*dx + dy*dy) <= r*r;
+  }
+
+  function sendScoreToBot(){
+    if (!tg) return;
+    const payload = JSON.stringify({ type:"score", game:"flappy", score, best });
+    try { tg.sendData(payload); } catch {}
+  }
+
+  function gameOver(){
+    if (state === State.OVER) return;
+    setState(State.OVER);
+    cancelAnimationFrame(raf); raf = 0;
+
+    if (score > best){
+      best = score;
+      localStorage.setItem("flappy_best_webapp", String(best));
+      bestEl.textContent = best;
+    }
+    sendScoreToBot();
+  }
+
+  function flap(){
+    if (state === State.READY || state === State.OVER){
+      start();
+      bird.vy = -JUMP;
+      return;
+    }
+    if (state === State.PAUSED) return;
+    if (state === State.RUNNING) bird.vy = -JUMP;
+  }
+
+  function start(){
+    if (state === State.RUNNING) return;
+    if (state === State.PAUSED){ resume(); return; }
+    if (state === State.OVER){ reset(true); }
+    setState(State.RUNNING);
+    lastT = performance.now();
+    raf = requestAnimationFrame(loop);
+  }
+
+  function pause(){
+    if (state !== State.RUNNING) return;
+    setState(State.PAUSED);
+    cancelAnimationFrame(raf); raf = 0;
+  }
+
+  function resume(){
+    if (state !== State.PAUSED) return;
+    setState(State.RUNNING);
+    lastT = performance.now();
+    raf = requestAnimationFrame(loop);
+  }
+
+  function step(dt){
+    const rect = canvas.getBoundingClientRect();
+    const w = rect.width, h = rect.height;
+
+    for (const cl of clouds){
+      cl.x -= (20 + cl.s*30) * dt;
+      if (cl.x < -140){
+        cl.x = w + rand(40, 180);
+        cl.y = rand(55, 150);
+      }
+    }
+
+    timeSinceSpawn += dt;
+    if (timeSinceSpawn >= SPAWN_EVERY){
+      timeSinceSpawn = 0;
+      spawnPipe();
+    }
+
+    bird.vy += G * dt;
+    bird.y += bird.vy * dt;
+
+    if (bird.y - bird.r < 0){
+      bird.y = bird.r;
+      bird.vy = 0;
+    }
+
+    for (const p of pipes){
+      p.x -= PIPE_SPEED * dt;
+
+      if (!p.passed && (p.x + PIPE_W) < (bird.x - bird.r)){
+        p.passed = true;
+        score++;
+        scoreEl.textContent = String(score);
+        if (score > best){
+          best = score;
+          localStorage.setItem("flappy_best_webapp", String(best));
+          bestEl.textContent = String(best);
+        }
+      }
+
+      const topRect = {x:p.x, y:0, w:PIPE_W, h:p.topH};
+      const botRect = {x:p.x, y:p.gapY, w:PIPE_W, h:(h - GROUND_H - p.gapY)};
+
+      if (
+        circleRectCollide(bird.x, bird.y, bird.r, topRect.x, topRect.y, topRect.w, topRect.h) ||
+        circleRectCollide(bird.x, bird.y, bird.r, botRect.x, botRect.y, botRect.w, botRect.h)
+      ){
+        gameOver(); return;
+      }
+    }
+
+    pipes = pipes.filter(p => p.x + PIPE_W > -60);
+
+    if (bird.y + bird.r > h - GROUND_H){
+      bird.y = h - GROUND_H - bird.r;
+      gameOver(); return;
+    }
+  }
+
+  function drawCloud(x, y, s){
+    ctx.save();
+    ctx.globalAlpha = 0.22;
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.ellipse(x, y, 42*s, 22*s, 0, 0, Math.PI*2);
+    ctx.ellipse(x+28*s, y-10*s, 30*s, 18*s, 0, 0, Math.PI*2);
+    ctx.ellipse(x+54*s, y, 40*s, 22*s, 0, 0, Math.PI*2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawPipe(x, y, w, h){
+    if (h <= 0) return;
+    const g = ctx.createLinearGradient(x, y, x+w, y);
+    g.addColorStop(0, "rgba(62,227,122,.95)");
+    g.addColorStop(1, "rgba(22,184,92,.95)");
+    ctx.fillStyle = g;
+    ctx.fillRect(x, y, w, h);
+
+    ctx.strokeStyle = "rgba(255,255,255,.18)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x+1, y+1, w-2, h-2);
+
+    const capH = Math.min(18, h);
+    ctx.fillStyle = "rgba(0,0,0,.08)";
+    ctx.fillRect(x-6, y, w+12, capH);
+    ctx.strokeRect(x-6+1, y+1, w+12-2, capH-2);
+  }
+
+  function drawBird(){
+    ctx.save();
+    ctx.translate(bird.x, bird.y);
+    const ang = Math.max(-0.5, Math.min(0.9, bird.vy / 700));
+    ctx.rotate(ang);
+
+    ctx.fillStyle = "rgba(0,0,0,.20)";
+    ctx.beginPath();
+    ctx.ellipse(4, 8, 16, 10, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(255,211,90,.98)";
+    ctx.beginPath();
+    ctx.arc(0, 0, bird.r, 0, Math.PI*2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(255,255,255,.35)";
+    ctx.beginPath();
+    ctx.ellipse(-4, 4, 10, 7, 0.2, 0, Math.PI*2);
+    ctx.fill();
+
+    ctx.fillStyle = "#0b1630";
+    ctx.beginPath();
+    ctx.arc(6, -4, 4, 0, Math.PI*2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(255,140,0,.95)";
+    ctx.beginPath();
+    ctx.moveTo(14, 0);
+    ctx.lineTo(26, 4);
+    ctx.lineTo(14, 8);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  function draw(){
+    const rect = canvas.getBoundingClientRect();
+    const w = rect.width, h = rect.height;
+    ctx.clearRect(0,0,w,h);
+
+    for (const cl of clouds) drawCloud(cl.x, cl.y, cl.s);
+
+    for (const p of pipes){
+      drawPipe(p.x, 0, PIPE_W, p.topH);
+      drawPipe(p.x, p.gapY, PIPE_W, h - GROUND_H - p.gapY);
+    }
+
+    ctx.fillStyle = "rgba(0,0,0,.12)";
+    ctx.fillRect(0, h - GROUND_H, w, GROUND_H);
+
+    drawBird();
+  }
+
+  function loop(now){
+    if (state !== State.RUNNING) return;
+    const dt = Math.min(0.033, (now - lastT) / 1000);
+    lastT = now;
+    step(dt); draw();
+    raf = requestAnimationFrame(loop);
+  }
+
+  // Controls
+  canvas.addEventListener("pointerdown", (e) => { e.preventDefault(); flap(); });
+
+  playBtn.addEventListener("click", (e) => { e.stopPropagation(); start(); });
+  pauseBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (state === State.RUNNING) pause();
+    else if (state === State.PAUSED) resume();
+  });
+
+  closeBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (tg && tg.close) tg.close();
+    else alert("Open inside Telegram to use Close.");
+  });
+
+  requestAnimationFrame(() => { resizeCanvas(); reset(false); });
+})();
+</script>
+</body>
+</html>
